@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Bookmark Archiver</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 400px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      color: #e7e9ea;
+      background: #0f1419;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: #71767b;
+      margin-bottom: 16px;
+    }
+
+    .status-bar {
+      background: #1d2d3d;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+    }
+
+    .status-bar .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.idle    { background: #71767b; }
+    .dot.active  { background: #1d9bf0; animation: pulse 1s ease-in-out infinite; }
+    .dot.done    { background: #00ba7c; }
+    .dot.error   { background: #f4212e; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .stat-box {
+      background: #1d2d3d;
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1d9bf0;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #71767b;
+      margin-top: 2px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 9999px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    button:not(:disabled):hover {
+      opacity: 0.85;
+    }
+
+    #startBtn {
+      background: #1d9bf0;
+      color: #fff;
+    }
+    #stopBtn {
+      background: #f4212e;
+      color: #fff;
+    }
+    #exportBtn {
+      background: #00ba7c;
+      color: #fff;
+    }
+    #sendBtn {
+      background: #71767b;
+      color: #fff;
+    }
+
+    .section-label {
+      font-size: 12px;
+      color: #71767b;
+      margin-bottom: 6px;
+      margin-top: 8px;
+    }
+
+    .log {
+      background: #1d2d3d;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 160px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #b0b4b9;
+    }
+    .log .warn { color: #ffd400; }
+    .log .info { color: #1d9bf0; }
+    .log .ok   { color: #00ba7c; }
+    .log .err  { color: #f4212e; }
+
+    .footer {
+      font-size: 11px;
+      color: #71767b;
+      text-align: center;
+      margin-top: 12px;
+    }
+
+    .server-input {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .server-input input {
+      flex: 1;
+      padding: 8px 12px;
+      background: #1d2d3d;
+      border: 1px solid #2f3f4f;
+      border-radius: 6px;
+      color: #e7e9ea;
+      font-size: 12px;
+      outline: none;
+    }
+    .server-input input:focus {
+      border-color: #1d9bf0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>
+    <span>🔖</span> Bookmark Archiver
+  </h1>
+  <div class="subtitle">Scrape X bookmarks beyond the API limit</div>
+
+  <div class="status-bar" id="statusBar">
+    <span class="dot idle" id="statusDot"></span>
+    <span id="statusText">Ready — navigate to x.com/i/bookmarks</span>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-value" id="scrapedCount">0</div>
+      <div class="stat-label">Scraped</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="newCount">0</div>
+      <div class="stat-label">New</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="scrollCount">0</div>
+      <div class="stat-label">Scrolls</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn">▶ Start Scrape</button>
+    <button id="stopBtn" disabled>■ Stop</button>
+  </div>
+
+  <div class="controls">
+    <button id="exportBtn" disabled>📥 Download JSON</button>
+    <button id="sendBtn" disabled>📤 Send to Server</button>
+  </div>
+
+  <div class="section-label">Local Server Endpoint</div>
+  <div class="server-input">
+    <input type="text" id="serverUrl" value="http://localhost:6007/api/bookmarks" placeholder="http://localhost:6007/api/bookmarks" />
+  </div>
+
+  <div class="section-label">Activity Log</div>
+  <div class="log" id="log">
+    <div>Waiting to start...</div>
+  </div>
+
+  <div class="footer">X/Twitter Bookmark Archiver v1.0.0</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

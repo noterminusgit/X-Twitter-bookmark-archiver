@@ -1,215 +1,211 @@
 # X-Twitter Bookmark Archiver
 
-A Python script to download and archive all your Twitter/X bookmarks as PDFs, images, and videos. Supports premium accounts with bookmark folders, thread detection, and incremental updates for cron job automation.
+A Python script to download and archive all your X/Twitter bookmarks as PDFs, images, and videos. Supports folder structure, thread detection, video downloads, and incremental updates for cron job automation.
+
+> **⚠️ API Update (2024–2025):** The X API v2 bookmarks endpoint now **requires** OAuth 2.0 Authorization Code with PKCE (User Context). Older auth methods (Bearer Token, OAuth 1.0a) will not work. This script has been updated to use the correct authentication flow.
 
 ## Features
 
 - **Multiple Formats**: Saves bookmarks as PDFs, high-quality images (PNG), and HTML for videos
-- **Folder Support**: Mimics Twitter/X bookmark folder structure for premium accounts
+- **Folder Support**: Folder structure for organizing bookmarks (note: X API still doesn't expose bookmark folders natively)
 - **Thread Detection**: Automatically detects and archives entire threads in single files
-- **Video Support**: Saves HTML documents for video posts with download instructions and attempts automatic download via yt-dlp
-- **Incremental Updates**: Tracks processed bookmarks to only download new content
-- **Cron-Compatible**: Designed to run as a scheduled task without removing existing content
-- **Rate Limiting**: Respects Twitter API limits with automatic backoff
+- **Video Support**: Downloads videos via yt-dlp and saves HTML reference pages
+- **Long-form Tweets**: Full support for posts longer than 280 characters
+- **Incremental Updates**: Tracks processed bookmarks via state file to only download new content
+- **Cron-Compatible**: Designed to run as a scheduled task without duplicating content
+- **Rate Limiting**: Respects X API limits with automatic backoff
+- **Local Auth Server**: Built-in callback server for a seamless OAuth authorization flow
 
 ## Directory Structure
 
 ```
 output/
 ├── pdf/
-│   ├── [folder_name]/     # Premium bookmark folders
-│   └── [tweet_id].pdf     # Individual tweets or full threads
+│   └── [tweet_id].pdf       # Individual tweets or full threads
 ├── images/
-│   ├── [folder_name]/
-│   └── [tweet_id].png     # High-quality screenshots
+│   └── [tweet_id].png       # High-quality screenshots
 └── videos/
-    ├── [folder_name]/
-    ├── [tweet_id].html    # HTML document with video info
-    └── [tweet_id]_*.mp4   # Downloaded videos (if successful)
+    ├── [tweet_id].html      # HTML document with video info
+    └── [tweet_id]_*.mp4     # Downloaded videos (if successful)
 ```
 
 ## Prerequisites
 
 - Python 3.8 or higher
-- Twitter/X Developer Account with API access
-- Active Twitter/X account with bookmarks
+- X/Twitter Developer Account with an active Project & App
+- Active X/Twitter account with bookmarks
 
-## Installation
+## Setup
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/yourusername/X-Twitter-bookmark-archiver.git
-   cd X-Twitter-bookmark-archiver
-   ```
+### 1. Clone the repository
 
-2. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/noterminusgit/X-Twitter-bookmark-archiver.git
+cd X-Twitter-bookmark-archiver
+```
 
-3. **Install Playwright browsers:**
-   ```bash
-   playwright install chromium
-   ```
+### 2. Install dependencies
 
-4. **Set up Twitter API credentials:**
-   - Go to [Twitter Developer Portal](https://developer.twitter.com/en/portal/dashboard)
-   - Create a new app or use an existing one
-   - Generate the following credentials:
-     - Bearer Token
-     - API Key and Secret (Consumer Key/Secret)
-     - Access Token and Secret
-   - Make sure your app has Read permissions and access to bookmarks
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
 
-5. **Configure environment variables:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
+### 3. Set up X API credentials
 
-## Configuration
+You need an X Developer account and a Project + App:
 
-Edit the `.env` file with your Twitter API credentials:
+1. Go to [X Developer Portal](https://developer.twitter.com/en/portal/dashboard)
+2. Create a new Project & App (or use an existing one)
+3. In **App settings → "User authentication settings"**, click "Set up"
+4. Enable **OAuth 2.0 Authorization Code with PKCE**
+5. For "App permissions", select **"Read"** (bookmarks only need read)
+6. Set **"Callback URI / Redirect URL"** to: `http://127.0.0.1:6006/callback`
+7. Set **"Website URL"** to any valid URL (e.g., `https://example.com`)
+8. Save your changes
+9. Go to the **"Keys and Tokens"** tab and copy your **Client ID**
+
+### 4. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your Client ID:
 
 ```env
-TWITTER_BEARER_TOKEN=your_bearer_token_here
-TWITTER_API_KEY=your_api_key_here
-TWITTER_API_SECRET=your_api_secret_here
-TWITTER_ACCESS_TOKEN=your_access_token_here
-TWITTER_ACCESS_SECRET=your_access_secret_here
-
-# Optional
-OUTPUT_DIR=output
-STATE_FILE=.archive_state.json
+TWITTER_CLIENT_ID=your_client_id_here
 ```
+
+### 5. Run the authorization flow (first time only)
+
+```bash
+python bookmark_archiver.py --auth
+```
+
+This will:
+- Open your browser to authorize the app with your X account
+- Start a local server on port 6006 to catch the redirect
+- Save the OAuth access token to `.x_token.json`
+- The token is valid until revoked
+
+**For headless servers:** If the browser doesn't open automatically, the script will display the authorization URL. Copy it, visit it in a browser, authorize, and then paste the full redirect URL back into the terminal.
 
 ## Usage
 
-### Manual Execution
-
-Run the script manually:
+### Archive your bookmarks
 
 ```bash
 python bookmark_archiver.py
 ```
 
+### First run
+
+On the first run, it will:
+1. Load the saved OAuth token
+2. Fetch all your bookmarks via X API v2
+3. Render each tweet as HTML using Playwright
+4. Save as PDF and PNG screenshot
+5. Download any videos via yt-dlp
+6. Track what's been processed in `.archive_state.json`
+
+Subsequent runs only process **new** bookmarks (incremental).
+
+### Re-authorization
+
+If your token expires or you get 403 errors:
+
+```bash
+python bookmark_archiver.py --auth
+```
+
 ### Automated Execution (Cron Job)
 
-Set up a cron job to run the script automatically:
+Add to crontab (runs daily at 2 AM):
 
-1. **Edit crontab:**
-   ```bash
-   crontab -e
-   ```
+```bash
+0 2 * * * cd /path/to/X-Twitter-bookmark-archiver && /usr/bin/python3 bookmark_archiver.py
+```
 
-2. **Add a cron entry (example: daily at 2 AM):**
-   ```cron
-   0 2 * * * cd /path/to/X-Twitter-bookmark-archiver && /usr/bin/python3 bookmark_archiver.py
-   ```
+## Configuration
 
-3. **Other scheduling examples:**
-   - Every 6 hours: `0 */6 * * *`
-   - Every day at midnight: `0 0 * * *`
-   - Every Monday at 3 AM: `0 3 * * 1`
+Edit `.env` for custom paths:
 
-### Windows Task Scheduler
+```env
+# Required
+TWITTER_CLIENT_ID=your_client_id_here
 
-1. Open Task Scheduler
-2. Create a new task
-3. Set the trigger (e.g., daily, weekly)
-4. Set the action to run:
-   - Program: `python.exe`
-   - Arguments: `bookmark_archiver.py`
-   - Start in: `/path/to/X-Twitter-bookmark-archiver`
+# Optional
+TWITTER_CLIENT_SECRET=your_client_secret_here
+OUTPUT_DIR=output
+STATE_FILE=.archive_state.json
+TOKEN_FILE=.x_token.json
+```
 
 ## How It Works
 
-1. **Fetches Bookmarks**: Uses Twitter API v2 to retrieve all your bookmarks
-2. **Checks State**: Compares with `.archive_state.json` to identify new bookmarks
-3. **Detects Threads**: Identifies if a bookmark is part of a conversation thread
-4. **Renders Content**: Uses Playwright to render tweets as HTML
-5. **Saves Formats**:
-   - PDF: High-quality PDF documents
-   - Images: PNG screenshots with 2x scale for clarity
-   - Videos: HTML files with metadata and download links
-6. **Downloads Videos**: Attempts to download videos using yt-dlp
-7. **Updates State**: Saves processed tweet IDs to avoid re-downloading
+1. **Authorization**: Uses OAuth 2.0 Authorization Code with PKCE (User Context) — the only auth method the bookmarks endpoint supports
+2. **Fetches Bookmarks**: Uses X API v2 `GET /2/users/:id/bookmarks` endpoint
+3. **Checks State**: Compares with `.archive_state.json` to identify new bookmarks
+4. **Detects Threads**: Identifies if a bookmark is part of a conversation thread
+5. **Renders Content**: Uses Playwright to render tweets as styled HTML
+6. **Saves Formats**: PDF (A4), PNG screenshots (2x retina), HTML for videos
+7. **Downloads Videos**: Attempts video download via yt-dlp
+8. **Updates State**: Saves processed tweet IDs to avoid re-downloading
 
-## State Management
+## Important Notes
 
-The script maintains a `.archive_state.json` file that tracks:
-- Processed tweet IDs
-- Processing timestamps
-- Bookmark folders
-- Thread status
+- **Bookmark Folders**: The X API v2 still doesn't expose bookmark folder information. All bookmarks are saved flat.
+- **Token Security**: The OAuth token is saved as `.x_token.json` with restricted permissions (0600). Keep it secure.
+- **Rate Limits**: X API has rate limits (typically 15 requests per 15-minute window for bookmarks). The script handles this gracefully with `wait_on_rate_limit`.
+- **Deleted Tweets**: If a bookmarked tweet has been deleted, the API will skip it.
 
-This ensures:
-- No duplicate downloads
-- Incremental updates only fetch new bookmarks
-- Existing content is never removed
+## Troubleshooting
 
-## Troublesoting
+### 403 Forbidden errors
 
-### Authentication Errors
+Your auth token is likely expired or using the wrong auth method. Re-run:
 
-If you see authentication errors:
-- Verify your API credentials in `.env`
-- Ensure your Twitter app has the correct permissions
-- Check if your access tokens are still valid
+```bash
+python bookmark_archiver.py --auth
+```
 
-### Rate Limiting
+### Browser fails to launch
 
-The script includes automatic rate limit handling, but if you have many bookmarks:
-- The first run may take a while
-- Subsequent runs will be faster (incremental updates only)
-- The script waits 1 second between tweets to be respectful
-
-### Video Download Failures
-
-Some videos may fail to download due to:
-- Twitter's anti-bot measures
-- Private or restricted content
-- Network issues
-
-In these cases, the HTML file will still be saved with a link to view the video on Twitter.
-
-### Browser Issues
-
-If Playwright fails to launch:
 ```bash
 playwright install chromium
 ```
 
+### "Missing required environment variables"
+
+Ensure your `.env` file has `TWITTER_CLIENT_ID` set correctly.
+
+### Video download failures
+
+Some videos fail due to X's anti-bot measures. An HTML reference file is always saved with a link to view on X.
+
 ## Logging
 
-The script creates a `bookmark_archiver.log` file with detailed information about:
-- Bookmarks fetched
-- Files created
-- Errors encountered
-- Processing status
+The script creates `bookmark_archiver.log` with detailed processing information.
 
-## Privacy and Security
+## Privacy & Security
 
-- Your API credentials are stored locally in `.env` (gitignored)
-- No data is sent to third parties
-- All processing happens locally on your machine
-- The `.archive_state.json` only contains tweet IDs and timestamps
+- Credentials stored locally in `.env` (gitignored)
+- OAuth token stored locally in `.x_token.json` (gitignored, 0600 permissions)
+- No data sent to third parties
+- All processing happens locally
 
 ## Limitations
 
-- **Bookmark Folders**: The Twitter API v2 doesn't currently expose bookmark folder information, so all bookmarks are saved to the default directory. This may change as the API evolves.
-- **Media Quality**: Image and video quality depends on what Twitter provides via the API
-- **Deleted Tweets**: If a bookmarked tweet is deleted, it won't be downloadable
-- **Rate Limits**: Twitter API has rate limits; the script handles them gracefully
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
+- **Bookmark Folders**: X API v2 still doesn't expose bookmark folders
+- **Media Quality**: Depends on what X provides via the API
+- **Deleted Tweets**: Not downloadable
+- **Rate Limits**: 15 requests / 15-min window (handled automatically)
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License
 
 ## Disclaimer
 
-This tool is for personal archival purposes only. Ensure you comply with Twitter's Terms of Service and respect content creators' rights. The developers are not responsible for any misuse of this tool.
+For personal archival purposes. Ensure compliance with X/Twitter's Terms of Service.
