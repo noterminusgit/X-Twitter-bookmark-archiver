@@ -1,8 +1,8 @@
 #!/bin/bash
-# Setup script for Twitter Bookmark Archiver
+# Setup script for X/Twitter Bookmark Archiver
 
 echo "========================================="
-echo "Twitter Bookmark Archiver - Setup"
+echo "X/Twitter Bookmark Archiver - Setup"
 echo "========================================="
 echo ""
 
@@ -45,7 +45,7 @@ echo ""
 echo "Creating configuration file..."
 if [ ! -f .env ]; then
     cp .env.example .env
-    echo ".env file created. Please edit it with your Twitter API credentials."
+    echo ".env file created. Please edit it with your X API Client ID."
 else
     echo ".env file already exists. Skipping..."
 fi
@@ -56,7 +56,9 @@ echo "Setup complete!"
 echo "========================================="
 echo ""
 echo "Next steps:"
-echo "1. Edit .env file with your Twitter API credentials"
-echo "2. Run: python3 bookmark_archiver.py"
+echo "1. Edit .env with your X API Client ID"
+echo "2. Run: python3 bookmark_archiver.py --auth"
+echo "3. Authorize the app in your browser"
+echo "4. Run: python3 bookmark_archiver.py"
 echo ""
 echo "For more information, see README.md"

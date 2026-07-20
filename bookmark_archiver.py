@@ -13,14 +13,14 @@ import logging
 import argparse
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import re
 
 import requests
 from requests_oauthlib import OAuth1
 from dotenv import load_dotenv
 
-# Configure logging
+# ── Logging ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -31,13 +31,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 load_dotenv()
 
-# Configuration
+# ── Configuration ────────────────────────────────────────────────────────
 OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', 'output'))
 STATE_FILE = Path(os.getenv('STATE_FILE', '.archive_state.json'))
-TWITTER_BEARER_TOKEN = os.getenv('TWITTER_BEARER_TOKEN')
+
+# Optional: scraped bookmarks JSON file from the Chrome extension
+SCRAPED_BOOKMARKS_FILE = os.getenv('SCRAPED_BOOKMARKS_FILE')
+
+# OAuth 1.0a credentials
 TWITTER_API_KEY = os.getenv('TWITTER_API_KEY')
 TWITTER_API_SECRET = os.getenv('TWITTER_API_SECRET')
 TWITTER_ACCESS_TOKEN = os.getenv('TWITTER_ACCESS_TOKEN')
@@ -186,13 +189,20 @@ class XAPIClient:
         return tweets
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Bookmark Archiver
+# ═══════════════════════════════════════════════════════════════════════════
+
 class BookmarkArchiver:
-    def __init__(self, formats: dict):
+    def __init__(self, formats: dict, scraped_file: Optional[str] = None):
         """Initialize the bookmark archiver.
 
         Args:
             formats: dict mapping format names to booleans, e.g.
                      {'markdown': True, 'pdf': False, 'images': True, 'videos': True}
+            scraped_file: Optional path to a JSON file of scraped bookmarks
+                          from the Chrome extension. Tweets in this file
+                          are skipped during API processing.
         """
         self.formats = formats
         self.state = self._load_state()
@@ -203,6 +213,10 @@ class BookmarkArchiver:
         self.playwright = None
         self.browser = None
         self.context = None
+
+        # Load scraped bookmark IDs (from Chrome extension DOM scrape)
+        self.scraped_ids: Set[str] = set()
+        self._load_scraped_bookmarks(scraped_file)
 
         # Create required output directories
         dirs = []
@@ -217,8 +231,6 @@ class BookmarkArchiver:
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
 
-    # -- state management ----------------------------------------------------
-
     def _load_state(self) -> Dict:
         if STATE_FILE.exists():
             try:
@@ -228,6 +240,49 @@ class BookmarkArchiver:
                 logger.warning(f"Failed to load state file: {e}")
                 return {'processed_tweets': {}, 'last_run': None}
         return {'processed_tweets': {}, 'last_run': None}
+
+    def _load_scraped_bookmarks(self, scraped_file: Optional[str]):
+        """Load scraped bookmark IDs from Chrome extension JSON export.
+
+        The scraped JSON is an array of objects, each with at least
+        a 'tweetId' field. This file comes from the DOM-scraping
+        Chrome extension and captures bookmarks the API doesn't return.
+        """
+        if not scraped_file:
+            return
+        scraped_path = Path(scraped_file)
+        if not scraped_path.exists():
+            logger.warning(f"Scraped bookmarks file not found: {scraped_file}")
+            return
+        try:
+            with open(scraped_path, 'r') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                # Could be wrapped in an object with a bookmarks key
+                items = data.get('bookmarks', data.get('tweets',
+                            data.get('data', [data])))
+                if isinstance(items, dict):
+                    items = [items]
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+
+            count = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                tid = item.get('tweetId') or item.get('id') or item.get('tweet_id')
+                if tid:
+                    self.scraped_ids.add(str(tid))
+                    count += 1
+
+            logger.info(
+                f"Loaded {count} scraped bookmark IDs from {scraped_file}"
+                f" ({len(self.scraped_ids)} unique)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load scraped bookmarks file: {e}")
 
     def _save_state(self):
         try:
@@ -269,12 +324,12 @@ class BookmarkArchiver:
 
     @staticmethod
     def _sanitize_filename(text: str) -> str:
-        text = re.sub(r'[<>:"/\\|?*]', '_', text)
+        text = re.sub(r'[<>:\"/\\|?*]', '_', text)
         return text[:100]
 
     def _get_folder_path(self, folder_name: Optional[str], base_dir: Path) -> Path:
         if folder_name and folder_name != 'default':
-            folder_path = base_dir / self._sanitize_filename(folder_name)
+            folder_path = base_dir / BookmarkArchiver._sanitize_filename(folder_name)
             folder_path.mkdir(parents=True, exist_ok=True)
             return folder_path
         return base_dir
@@ -360,91 +415,160 @@ class BookmarkArchiver:
     def _render_tweet_html(self, tweet_data: dict, is_thread: bool = False,
                            thread_tweets: List[dict] = None) -> str:
         html_parts = []
-        html_parts.append("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                    max-width: 600px;
-                    margin: 40px auto;
-                    padding: 20px;
-                    background: #f7f9fa;
-                }
-                .tweet {
-                    background: white;
-                    border: 1px solid #e1e8ed;
-                    border-radius: 16px;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                }
-                .header {
-                    display: flex;
-                    align-items: center;
-                    margin-bottom: 12px;
-                }
-                .author-name {
-                    font-weight: bold;
-                    margin-right: 5px;
-                }
-                .username {
-                    color: #536471;
-                }
-                .content {
-                    font-size: 16px;
-                    line-height: 1.5;
-                    margin: 12px 0;
-                    white-space: pre-wrap;
-                }
-                .timestamp {
-                    color: #536471;
-                    font-size: 14px;
-                    margin-top: 12px;
-                }
-                .thread-indicator {
-                    background: #1d9bf0;
-                    color: white;
-                    padding: 8px 16px;
-                    border-radius: 20px;
-                    margin-bottom: 20px;
-                    text-align: center;
-                }
-            </style>
-        </head>
-        <body>
-        """)
+        html_parts.append("""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                         Helvetica, Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f7f9fa;
+            color: #0f1419;
+        }
+        .tweet {
+            background: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .author-name {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        .username {
+            color: #536471;
+            font-size: 14px;
+        }
+        .content {
+            font-size: 16px;
+            line-height: 1.5;
+            margin: 12px 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .timestamp {
+            color: #536471;
+            font-size: 14px;
+            margin-top: 12px;
+        }
+        .thread-indicator {
+            background: #1d9bf0;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .media {
+            margin-top: 12px;
+        }
+        .media img {
+            max-width: 100%;
+            border-radius: 12px;
+        }
+        .metrics {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #536471;
+        }
+        .metrics span {
+            margin-right: 16px;
+        }
+        a { color: #1d9bf0; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+""")
 
         if is_thread and thread_tweets:
-            html_parts.append('<div class="thread-indicator">Thread</div>')
+            html_parts.append(
+                '<div class="thread-indicator">Thread</div>'
+            )
             for tweet in thread_tweets:
-                author = tweet.get('author', {})
+                author = tweet.get('author', {}) or {}
                 html_parts.append(f"""
-                <div class="tweet">
-                    <div class="header">
-                        <span class="author-name">{author.get('name', 'Unknown')}</span>
-                        <span class="username">@{author.get('username', 'unknown')}</span>
-                    </div>
-                    <div class="content">{tweet.get('text', '')}</div>
-                    <div class="timestamp">{tweet.get('created_at', '')}</div>
-                </div>
-                """)
+<div class="tweet">
+    <div class="header">
+        <span class="author-name">{author.get('name', 'Unknown')}</span>
+        <span class="username">@{author.get('username', 'unknown')}</span>
+    </div>
+    <div class="content">{self._escape_html(tweet.get('text', ''))}</div>
+    <div class="timestamp">{tweet.get('created_at', '')}</div>
+</div>
+""")
         else:
-            author = tweet_data.get('author', {})
+            author = tweet_data.get('author', {}) or {}
+            metrics = tweet_data.get('metrics', {})
+            metrics_html = ""
+            if metrics:
+                parts = []
+                if metrics.get('like_count') is not None:
+                    parts.append(f"❤️ {metrics['like_count']}")
+                if metrics.get('retweet_count') is not None:
+                    parts.append(f"🔁 {metrics['retweet_count']}")
+                if metrics.get('reply_count') is not None:
+                    parts.append(f"💬 {metrics['reply_count']}")
+                if parts:
+                    metrics_html = '<div class="metrics">' + '  '.join(parts) + '</div>'
+
+            # Media
+            media_html = ""
+            for m in tweet_data.get('media', []):
+                if m.get('type') == 'photo' and m.get('url'):
+                    media_html += f'\n    <img src="{m["url"]}" alt="{m.get("alt_text", "")}" />'
+                elif m.get('type') == 'video' and m.get('preview_image_url'):
+                    media_html += (
+                        f'\n    <img src="{m["preview_image_url"]}" '
+                        f'alt="Video thumbnail" />'
+                    )
+
+            tweet_url = (
+                f'https://x.com/{author.get("username", "unknown")}'
+                f'/status/{tweet_data.get("id", "")}'
+            )
+
             html_parts.append(f"""
-            <div class="tweet">
-                <div class="header">
-                    <span class="author-name">{author.get('name', 'Unknown')}</span>
-                    <span class="username">@{author.get('username', 'unknown')}</span>
-                </div>
-                <div class="content">{tweet_data.get('text', '')}</div>
-                <div class="timestamp">{tweet_data.get('created_at', '')}</div>
-            </div>
-            """)
+<div class="tweet">
+    <div class="header">
+        <span class="author-name">{author.get('name', 'Unknown')}</span>
+        <span class="username">@{author.get('username', 'unknown')}</span>
+    </div>
+    <div class="content">{self._escape_html(tweet_data.get('text', ''))}</div>
+    {metrics_html}
+    <div class="media">{media_html}
+    </div>
+    <div class="timestamp">
+        {tweet_data.get('created_at', '')} &middot;
+        <a href="{tweet_url}" target="_blank">View on X</a>
+    </div>
+</div>
+""")
 
         html_parts.append("</body></html>")
-        return ''.join(html_parts)
+        return '\n'.join(html_parts)
+
+    @staticmethod
+    def _escape_html(text: str) -> str:
+        """Escape HTML special characters."""
+        if not text:
+            return ''
+        return (text
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('"', '&quot;'))
 
     # -- PDF / image saving --------------------------------------------------
 
@@ -481,7 +605,7 @@ class BookmarkArchiver:
     def _save_video_html(self, tweet_data: dict, output_path: Path):
         try:
             tweet_id = tweet_data['id']
-            author = tweet_data.get('author', {})
+            author = tweet_data.get('author', {}) or {}
             username = author.get('username', 'unknown')
 
             html_content = f"""<!DOCTYPE html>
@@ -502,6 +626,11 @@ class BookmarkArchiver:
             border-radius: 8px;
             margin-bottom: 20px;
         }}
+        code {{
+            background: #e0e0e0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }}
     </style>
 </head>
 <body>
@@ -510,7 +639,7 @@ class BookmarkArchiver:
         <p><strong>Author:</strong> {author.get('name', 'Unknown')} (@{username})</p>
         <p><strong>Tweet ID:</strong> {tweet_id}</p>
         <p><strong>Link:</strong> <a href="https://x.com/{username}/status/{tweet_id}" target="_blank">View on X</a></p>
-        <p><strong>Text:</strong> {tweet_data.get('text', '')}</p>
+        <p><strong>Text:</strong> {self._escape_html(tweet_data.get('text', ''))}</p>
     </div>
     <p>Note: Download the video using yt-dlp or visit the link above to watch.</p>
     <p>Command: <code>yt-dlp https://x.com/{username}/status/{tweet_id}</code></p>
@@ -560,6 +689,17 @@ class BookmarkArchiver:
 
         if tweet_id in self.state['processed_tweets']:
             logger.debug(f"Skipping already processed tweet {tweet_id}")
+            return
+
+        # Skip tweets already captured by the DOM-scraping Chrome extension
+        if tweet_id in self.scraped_ids:
+            logger.info(f"Skipping tweet {tweet_id} \u2014 already in scraped bookmarks file")
+            self.state['processed_tweets'][tweet_id] = {
+                'processed_at': datetime.now(timezone.utc).isoformat(),
+                'folder': bookmark.get('folder', 'default'),
+                'is_thread': False,
+                'source': 'scraped_file',
+            }
             return
 
         logger.info(f"Processing tweet {tweet_id}")
@@ -616,10 +756,26 @@ class BookmarkArchiver:
             enabled = [k for k, v in self.formats.items() if v]
             logger.info(f"Enabled output formats: {', '.join(enabled)}")
 
+            # Report scraped bookmarks status
+            if self.scraped_ids:
+                logger.info(
+                    f"Loaded {len(self.scraped_ids)} scraped bookmark IDs \u2014 "
+                    f"these will be skipped during API processing"
+                )
+
             self._init_browser()
 
             me = self.api.get_me()
             bookmarks = self.api.get_bookmarks(me['id'])
+
+            api_count = len(bookmarks)
+            scraped_skip_count = len(
+                [b for b in bookmarks if str(b['id']) in self.scraped_ids]
+            )
+            logger.info(
+                f"Fetched {api_count} bookmarks via API, "
+                f"{scraped_skip_count} already in scraped file"
+            )
 
             for bookmark in bookmarks:
                 self.process_bookmark(bookmark)
@@ -633,6 +789,10 @@ class BookmarkArchiver:
         finally:
             self._close_browser()
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Entry Points
+# ═══════════════════════════════════════════════════════════════════════════
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -677,12 +837,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         '--no-videos', action='store_true', default=False,
         help='Disable video download output',
     )
+    parser.add_argument(
+        '--scraped', type=str, default=None,
+        help='Path to a scraped bookmarks JSON file from the Chrome extension. '
+             'Tweets listed in this file are skipped during API processing '
+             'since they were already captured via DOM scraping. '
+             'Can also be set via the SCRAPED_BOOKMARKS_FILE env var.',
+    )
     return parser
 
 
 def resolve_formats(args: argparse.Namespace) -> dict:
     """Merge --formats string, individual flags, and env var into a final dict."""
-    # Start with env / default
     if args.formats:
         formats = parse_output_formats(args.formats)
     else:
@@ -718,8 +884,14 @@ def main():
                       "TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET")
         return 1
 
+    # Determine scraped bookmarks file (CLI arg > env var)
+    scraped_path = args.scraped or SCRAPED_BOOKMARKS_FILE
+
     try:
-        archiver = BookmarkArchiver(formats)
+        archiver = BookmarkArchiver(
+            formats=formats,
+            scraped_file=scraped_path,
+        )
         archiver.run()
         return 0
     except Exception as e:

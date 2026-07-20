@@ -1,17 +1,16 @@
 # Quick Start Guide
 
-This guide will help you get started with the Twitter Bookmark Archiver in under 5 minutes.
+Get started with the X/Twitter Bookmark Archiver in under 5 minutes.
 
-## Step 1: Get Twitter API Credentials
+## Step 1: Get X API Credentials
 
-1. Go to https://developer.twitter.com/en/portal/dashboard
-2. Sign in with your Twitter account
-3. Create a new app (or use an existing one)
-4. In your app settings, generate:
-   - Bearer Token
-   - API Key and Secret
-   - Access Token and Secret
-5. Make sure your app has "Read" permissions
+1. Go to [X Developer Portal](https://developer.twitter.com/en/portal/dashboard)
+2. Create a new Project & App
+3. **App settings → "User authentication settings"** → Set up
+4. Enable **OAuth 2.0 Authorization Code with PKCE**
+5. Permissions: **Read**
+6. Redirect URL: `http://127.0.0.1:6006/callback`
+7. Save, then copy your **Client ID** from the Keys and Tokens tab
 
 ## Step 2: Install
 
@@ -34,82 +33,55 @@ cp .env.example .env
 
 ## Step 3: Configure
 
-Edit `.env` file with your API credentials:
+Edit `.env` with your Client ID:
 
 ```env
-TWITTER_BEARER_TOKEN=AAAAAAAAAAAAAAAAAAAAALsQ...
-TWITTER_API_KEY=kCv3fD8gE...
-TWITTER_API_SECRET=xY9mN2pK...
-TWITTER_ACCESS_TOKEN=1234567890-aBcDeF...
-TWITTER_ACCESS_SECRET=zW8xY7vU...
+TWITTER_CLIENT_ID=your_client_id_here
 ```
 
-## Step 4: Run
+## Step 4: Authorize (first time only)
+
+```bash
+python bookmark_archiver.py --auth
+```
+
+This opens your browser — log in and authorize the app. The token is saved to `.x_token.json`.
+
+## Step 5: Run
 
 ```bash
 python bookmark_archiver.py
 ```
 
-Or make it executable:
-```bash
-chmod +x bookmark_archiver.py
-./bookmark_archiver.py
-```
+Output goes to `output/`:
+- `output/pdf/` — PDF versions
+- `output/images/` — PNG screenshots
+- `output/videos/` — HTML files + downloaded videos
 
-## Step 5: Check Output
+## Automation (Cron)
 
-Your bookmarks will be saved in:
-```
-output/
-├── pdf/       # PDF versions
-├── images/    # PNG screenshots
-└── videos/    # HTML files + downloaded videos
-```
-
-## Automation (Optional)
-
-### Cron (Linux/Mac):
 ```bash
 crontab -e
 ```
 
-Add this line to run daily at 2 AM:
+Add (runs daily at 2 AM):
 ```
 0 2 * * * cd /path/to/X-Twitter-bookmark-archiver && python3 bookmark_archiver.py
 ```
 
-### Task Scheduler (Windows):
-1. Open Task Scheduler
-2. Create Basic Task
-3. Set schedule (e.g., daily)
-4. Action: Start a program
-   - Program: `python.exe`
-   - Arguments: `bookmark_archiver.py`
-   - Start in: `C:\path\to\X-Twitter-bookmark-archiver`
-
 ## Troubleshooting
 
-### "Missing required environment variables"
-- Check that your `.env` file exists and has all 5 credentials
-- Make sure there are no spaces around the `=` signs
+### "No OAuth token found"
+Run `python bookmark_archiver.py --auth` first.
 
-### "Failed to initialize Twitter client"
-- Verify your API credentials are correct
-- Ensure your app has Read permissions
-- Check that your tokens haven't expired
+### 403 Forbidden
+Token expired or wrong auth method. Run `python bookmark_archiver.py --auth` again.
 
 ### Browser fails to launch
 ```bash
 playwright install chromium
 ```
 
-### Rate limit errors
-- This is normal if you have many bookmarks
-- The script handles it automatically
-- Just wait and it will continue
-
-## Need Help?
-
-- Check the full documentation: [README.md](README.md)
+### Need Help?
+- Full docs: [README.md](README.md)
 - View logs: `bookmark_archiver.log`
-- Report issues: [GitHub Issues](https://github.com/yourusername/X-Twitter-bookmark-archiver/issues)
